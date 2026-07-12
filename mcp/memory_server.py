@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import io
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -777,8 +778,26 @@ def _handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
 
 def main() -> None:
     """Запустить MCP память-сервер в режиме stdio."""
+    # Перезапускаем stdin/stdout в бинарном режиме с явным UTF-8.
+    # Это необходимо на Windows где sys.stdin/stdout по умолчанию cp1251.
+    # Используем errors="replace" чтобы не падать на неожиданных символах.
+    stdin  = io.TextIOWrapper(
+        sys.stdin.buffer,
+        encoding="utf-8",
+        errors="replace",
+        newline="\n",
+    )
+    stdout = io.TextIOWrapper(
+        sys.stdout.buffer,
+        encoding="utf-8",
+        errors="replace",
+        newline="\n",
+        write_through=True,     # сбрасываем буфер после каждой записи
+    )
+
     STORY_DIR.mkdir(parents=True, exist_ok=True)
-    for line in sys.stdin:
+
+    for line in stdin:
         line = line.strip()
         if not line:
             continue
@@ -791,9 +810,8 @@ def main() -> None:
                 "id": None,
                 "error": {"code": -32700, "message": str(exc)},
             }
-        sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
-        sys.stdout.flush()
-
+        stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
+        stdout.flush()
 
 if __name__ == "__main__":
     main()

@@ -34,6 +34,10 @@ _SYSTEM_SCENE_PLANNER = """Ты — сценарист детективного 
 - Нельзя вводить новые предметы не упомянутые ранее
 - Нельзя описывать действия "за кадром" — только то что происходит сейчас
 - Убийца НЕ раскрывается до финальной сцены
+- Каждый подозреваемый должен получить хотя бы одну сцену где он говорит
+  или действует — иначе его присутствие в финале необоснованно
+- Не повторяй локации и детали которые уже были в предыдущих сценах
+  без нового поворота
 """
 
 _SYSTEM_PLAN_VALIDATOR = """Ты — логический валидатор плана сцены детектива.
@@ -51,6 +55,8 @@ REJECTED: [причина] — план содержит логическую о
 3. Нет новых предметов которых не было раньше?
 4. Нет действий "за кадром"?
 5. Не раскрывается убийца раньше финала?
+6. Сцена не повторяет локацию и набор деталей предыдущей сцены без нового поворота?
+7. Персонаж не делает два взаимоисключающих действия (прячется И продолжает осмотр)?
 
 Будь строгим но справедливым. Отвечай кратко.
 """
@@ -101,7 +107,7 @@ class ScenePlannerAgent:
         system_prompt: str,
         user_prompt: str,
         temperature: float = 0.3,
-        max_tokens: int = 3000,
+        max_tokens: int = 6000,
     ) -> str:
         """
         Вызов API для планировщика.
@@ -169,17 +175,10 @@ class ScenePlannerAgent:
         location_state: str,
         scene_transition: str,
         approved_scenes: List[Dict[str, Any]],
+        all_characters: Optional[List[str]] = None,  # ← НОВЫЙ параметр
     ) -> Tuple[str, bool]:
         """
         Создать и валидировать короткий логический план сцены.
-
-        Двухэтапный процесс:
-            1. Planner создаёт план (~50-100 слов)
-            2. Validator проверяет план (~500 токенов, быстро)
-
-        Если план отклонён — переписываем (максимум 3 попытки).
-        Если все попытки исчерпаны — возвращаем последний вариант плана
-        с флагом False (не одобрен), чтобы Writer всё равно мог работать.
 
         Args:
             scene_plan      : {index, title, goal, key_event, location}
@@ -187,11 +186,10 @@ class ScenePlannerAgent:
             location_state  : Текущие координаты персонажей/предметов
             scene_transition: Окончание предыдущей сцены
             approved_scenes : Уже написанные сцены
+            all_characters  : Все персонажи истории (для контроля охвата)
 
         Returns:
             Tuple[текст плана, был ли одобрен валидатором]
-            Текст плана может быть пустой строкой только если все попытки
-            завершились исключением до первого успешного вызова API.
         """
         scene_index = scene_plan.get("index", 0)
         scene_title = scene_plan.get("title", "")
@@ -212,15 +210,30 @@ class ScenePlannerAgent:
                 f"{last_text[:150]}{'...' if len(last_text) > 150 else ''}"
             )
 
-        # Храним последний успешно сгенерированный план между попытками.
-        # Инициализируем пустой строкой — если все попытки упадут до
-        # первого успешного _call_api, вернём "".
+        # ── НОВОЕ: Персонажи которых ещё не допросили ─────────────────────────
+        coverage_hint = ""
+        if all_characters and approved_scenes:
+            # Собираем имена из текстов уже написанных сцен
+            all_approved_text = " ".join(
+                s.get("text", "") for s in approved_scenes
+            ).lower()
+            untouched = [
+                char for char in all_characters
+                if char.lower() not in all_approved_text
+            ]
+            if untouched:
+                coverage_hint = (
+                    f"\n⚠️  ПЕРСОНАЖИ БЕЗ ЭКРАННОГО ВРЕМЕНИ: "
+                    f"{', '.join(untouched)}\n"
+                    f"Постарайся включить хотя бы одного из них в эту сцену.\n"
+                )
+
         last_plan_text: str = ""
 
         # Причина последнего отклонения — добавляется в промпт следующей попытки
         last_rejection_reason: str = ""
 
-        for attempt in range(1, 4):  # максимум 3 попытки
+        for attempt in range(1, 4):
             try:
                 # ── Этап 1: Создаём план ───────────────────────────────────────
 
@@ -229,7 +242,8 @@ class ScenePlannerAgent:
                 rejection_hint = ""
                 if last_rejection_reason:
                     rejection_hint = (
-                        f"\nПРЕДЫДУЩИЙ ПЛАН БЫЛ ОТКЛОНЁН: {last_rejection_reason}\n"
+                        f"\nПРЕДЫДУЩИЙ ПЛАН БЫЛ ОТКЛОНЁН: "
+                        f"{last_rejection_reason}\n"
                         f"Исправь эту ошибку в новом плане.\n"
                     )
 
@@ -243,6 +257,7 @@ class ScenePlannerAgent:
                     f"Ключевое событие: {scene_plan.get('key_event', '')}\n"
                     f"Место: {scene_plan.get('location', '')}\n\n"
                     + (f"КОНТЕКСТ:\n{prev_summary}\n\n" if prev_summary else "")
+                    + coverage_hint
                     + rejection_hint
                     + "Напиши логический план этой сцены (50-100 слов). "
                     "Только логика, без художественного текста."
@@ -252,7 +267,7 @@ class ScenePlannerAgent:
                     system_prompt=_SYSTEM_SCENE_PLANNER,
                     user_prompt=plan_prompt,
                     temperature=0.3,
-                    max_tokens=3000,
+                    max_tokens=6000,
                 )
 
                 # Сохраняем — теперь есть что вернуть даже при провале валидации
@@ -270,7 +285,17 @@ class ScenePlannerAgent:
                     f"STORY BIBLE (компактно):\n"
                     f"{story_bible[:800]}\n\n"
                     f"{location_state}\n\n"
-                    f"ПЛАН СЦЕНЫ {scene_index + 1}:\n{current_plan_text}\n\n"
+                    + (
+                        f"УЖЕ НАПИСАННЫЕ СЦЕНЫ (краткий список локаций и деталей):\n"
+                        + "\n".join(
+                            f"  [{s.get('title','?')}]: "
+                            f"{s.get('text','')[:80]}..."
+                            for s in approved_scenes[-2:]
+                        )
+                        + "\n\n"
+                        if approved_scenes else ""
+                    )
+                    + f"ПЛАН СЦЕНЫ {scene_index + 1}:\n{current_plan_text}\n\n"
                     f"Проверь план. Отвечай: APPROVED или REJECTED: причина"
                 )
 
@@ -278,7 +303,7 @@ class ScenePlannerAgent:
                     system_prompt=_SYSTEM_PLAN_VALIDATOR,
                     user_prompt=validate_prompt,
                     temperature=0.05,
-                    max_tokens=3000,
+                    max_tokens=6000,
                 )
 
                 validation = validation.strip()
@@ -291,9 +316,7 @@ class ScenePlannerAgent:
                     )
                     return current_plan_text, True
 
-                # План отклонён — извлекаем причину для следующей итерации
-                # Формат ответа: "REJECTED: причина" или "REJECTED причина"
-                rejected_prefix = validation[:8].upper()  # "REJECTED"
+                rejected_prefix = validation[:8].upper()
                 if rejected_prefix.startswith("REJECTED"):
                     last_rejection_reason = validation[8:].strip(" :")
                 else:
@@ -328,8 +351,7 @@ class ScenePlannerAgent:
             )
         else:
             logger.error(
-                "🗺️  ScenePlanner: все 3 попытки завершились ошибкой, "
-                "план пустой — Writer будет работать без плана"
+                "🗺️  ScenePlanner: все 3 попытки завершились ошибкой"
             )
 
         return last_plan_text, False

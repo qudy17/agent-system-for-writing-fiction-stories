@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
@@ -27,7 +28,8 @@ class OntologyMemoryMCP:
     Клиент для MCP memory_server.py.
 
     Общается через stdin/stdout JSON-RPC 2.0.
-    Реализует CRUD-операции над онтологической памятью детективного рассказа.
+    Использует бинарные потоки + явное UTF-8 кодирование/декодирование
+    чтобы избежать проблем с системной кодировкой Windows (cp1251).
     """
 
     def __init__(self, server_path: Path, story_dir: Path):
@@ -38,7 +40,9 @@ class OntologyMemoryMCP:
         """
         self.server_path = server_path
         self.story_dir = story_dir
-        self._process: Optional[subprocess.Popen[str]] = None
+        self._process: Optional[subprocess.Popen[bytes]] = None
+        self._stdin: Optional[io.BufferedWriter] = None
+        self._stdout: Optional[io.BufferedReader] = None
         self._next_id: int = 1
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -50,16 +54,30 @@ class OntologyMemoryMCP:
 
         env = os.environ.copy()
         env["STORY_DIR"] = str(self.story_dir)
+        # Форсируем UTF-8 для всех потоков дочернего процесса
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONLEGACYWINDOWSSTDIO"] = "0"
 
+        # Запускаем в бинарном режиме (text=False) —
+        # это единственный надёжный способ контролировать кодировку на Windows.
+        # text=True использует системную кодировку (cp1251) игнорируя encoding=
+        # в некоторых версиях Python на Windows.
         self._process = subprocess.Popen(
-            [sys.executable, str(self.server_path)],
+            [sys.executable, "-X", "utf8", str(self.server_path)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
+            text=False,         # ← бинарный режим
             env=env,
-            cwd=str(self.server_path.parent.parent),  # Корень проекта
+            cwd=str(self.server_path.parent.parent),
         )
+
+        # Оборачиваем бинарные потоки в текстовые с явным UTF-8
+        assert self._process.stdin is not None
+        assert self._process.stdout is not None
+
+        self._stdin = self._process.stdin
+        self._stdout = self._process.stdout
 
     def close(self) -> None:
         """Остановить MCP-сервер."""
@@ -72,10 +90,66 @@ class OntologyMemoryMCP:
             self._process.kill()
         finally:
             self._process = None
+            self._stdin = None
+            self._stdout = None
 
     # ── Низкоуровневая коммуникация ────────────────────────────────────────────
 
-    def _call(self, tool_name: str, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _write_line(self, data: str) -> None:
+        """
+        Записать строку в stdin сервера в UTF-8.
+
+        Args:
+            data : Строка для отправки (без символа новой строки)
+
+        Raises:
+            RuntimeError : Если процесс не запущен
+        """
+        if self._stdin is None:
+            raise RuntimeError("MCP процесс не запущен")
+
+        # Кодируем явно в UTF-8 — независимо от системной кодировки
+        raw = (data + "\n").encode("utf-8")
+        self._stdin.write(raw)
+        self._stdin.flush()
+
+    def _read_line(self) -> str:
+        """
+        Прочитать строку из stdout сервера, декодировав из UTF-8.
+
+        Returns:
+            Декодированная строка без символа новой строки
+
+        Raises:
+            RuntimeError : Если процесс не запущен или вернул пустой ответ
+        """
+        if self._stdout is None:
+            raise RuntimeError("MCP процесс не запущен")
+
+        raw = self._stdout.readline()
+
+        if not raw:
+            # Процесс завершился — читаем stderr для диагностики
+            stderr_text = ""
+            if self._process and self._process.stderr:
+                try:
+                    stderr_bytes = self._process.stderr.read(4096)
+                    stderr_text = stderr_bytes.decode("utf-8", errors="replace")
+                except Exception:
+                    pass
+            raise RuntimeError(
+                f"Нет ответа от MCP memory_server (процесс завершился). "
+                f"stderr: {stderr_text[:500]}"
+            )
+
+        # Декодируем явно из UTF-8
+        return raw.decode("utf-8", errors="replace").strip()
+
+    def _call(
+        self,
+        tool_name: str,
+        arguments: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
         Выполнить вызов инструмента через JSON-RPC 2.0.
 
@@ -87,14 +161,10 @@ class OntologyMemoryMCP:
             result-поле из JSON-RPC ответа
 
         Raises:
-            RuntimeError: Если сервер вернул ошибку или нет ответа
+            RuntimeError : Если сервер вернул ошибку или нет ответа
         """
         if self._process is None:
             self.start()
-
-        assert self._process is not None
-        assert self._process.stdin is not None
-        assert self._process.stdout is not None
 
         request = {
             "jsonrpc": "2.0",
@@ -107,30 +177,32 @@ class OntologyMemoryMCP:
         }
         self._next_id += 1
 
-        # Отправляем запрос
-        self._process.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
-        self._process.stdin.flush()
+        # Сериализуем с ensure_ascii=False — UTF-8 поток сам справится
+        request_json = json.dumps(request, ensure_ascii=False)
 
-        # Читаем ответ
-        response_line = self._process.stdout.readline()
+        # Отправляем через бинарный поток
+        self._write_line(request_json)
+
+        # Читаем ответ через бинарный поток
+        response_line = self._read_line()
+
         if not response_line:
-            stderr_output = ""
-            if self._process.stderr:
-                # Читаем stderr без блокировки
-                import select
-                if hasattr(select, "select"):
-                    ready, _, _ = select.select([self._process.stderr], [], [], 0.5)
-                    if ready:
-                        stderr_output = self._process.stderr.read(4096)
             raise RuntimeError(
-                f"Нет ответа от MCP memory_server. stderr: {stderr_output}"
+                f"MCP вернул пустую строку на запрос '{tool_name}'"
             )
 
-        response = json.loads(response_line)
+        try:
+            response = json.loads(response_line)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"MCP вернул невалидный JSON: {exc}\n"
+                f"Строка: {response_line[:300]}"
+            ) from exc
 
         if "error" in response:
             raise RuntimeError(
-                f"MCP ошибка [{tool_name}]: {response['error']['message']}"
+                f"MCP ошибка [{tool_name}]: "
+                f"{response['error'].get('message', response['error'])}"
             )
 
         return response["result"]

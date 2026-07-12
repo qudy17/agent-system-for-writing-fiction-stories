@@ -720,12 +720,17 @@ def _write_and_review_scene(
     )
 
     try:
+        all_characters = list(
+            tracker._bible.get("characters", {}).keys()
+        )
+        
         approved_plan, plan_approved = planner.create_scene_plan(
             scene_plan=scene_plan,
             story_bible=bible_for_writer,
             location_state=location_state,
             scene_transition=scene_transition,
             approved_scenes=approved_scenes,
+            all_characters=all_characters,
         )
         if approved_plan:
             status = "✅ одобрен" if plan_approved else "⚠️ без одобрения"
