@@ -26,52 +26,45 @@ APPROVE_MARKER = "[APPROVE]"
 
 # ─────────────────────────── Системный промпт ─────────────────────────────────
 
-_SYSTEM_CRITIC = """Ты — строгий литературный редактор и логик. Твоя задача —
-проверить сцену детективного рассказа на:
+_SYSTEM_CRITIC = """Ты — строгий литературный редактор и логик. Проверяй сцену
+детективного рассказа по следующим критериям:
 
-1. Логические противоречия (персонаж не может быть в двух местах одновременно)
-2. Несоответствие временной линии (past/present/future из памяти)
-3. Противоречия с уже установленными фактами о персонажах
-4. Улики, которые появляются «из ниоткуда» без подготовки
-5. Нарушения причинно-следственных связей
-6. Несоответствие месту/времени действия
+ПРИОРИТЕТ 1 — ДЛИНА:
+- Сцена должна быть 300–550 слов (считай слова сам)
+- Короче 300 → отклони: "Сцена слишком короткая (X слов)"
+- Длиннее 550 → отклони: "Сцена слишком длинная (X слов)"
+
+ПРИОРИТЕТ 2 — КАНОНИЧЕСКИЕ ФАКТЫ (раздел "КАНОНИЧЕСКИЕ ФАКТЫ" в промпте):
+- Имена и родство персонажей НЕЛЬЗЯ менять (сын ≠ племянник)
+- Роли персонажей НЕЛЬЗЯ менять
+- Число подозреваемых = все персонажи КРОМЕ следователя/детектива
+- Погода/время суток зафиксированы — не должны меняться
+- Если сцена противоречит каноническому факту → ОБЯЗАТЕЛЬНО отклони
+
+ПРИОРИТЕТ 3 — ЛОГИКА:
+- Персонаж не может быть в двух местах одновременно
+- Мёртвый персонаж не может действовать
+- Улики должны появляться логично, не "из воздуха"
+- Причинно-следственные связи должны соблюдаться
 
 ОБЯЗАТЕЛЬНЫЙ ФОРМАТ ОТВЕТА:
+Если всё корректно → одна строка: [APPROVE]
+Если есть проблемы → нумерованный список:
+1. [конкретная проблема со ссылкой на канонический факт]
+2. ...
 
-Если сцена логически корректна — ответь РОВНО ОДНОЙ строкой:
-[APPROVE]
-
-Если есть проблемы — перечисли их пронумерованным списком:
-1. [описание проблемы]
-2. [описание проблемы]
-...
-
-НЕ добавляй ничего лишнего. Только [APPROVE] или нумерованный список проблем.
-Будь конкретен: укажи, какой факт из памяти противоречит тексту сцены.
+ВАЖНО: будь строгим. Любое противоречие с каноническими фактами = отклонение.
+Не одобряй сцену если есть хоть одно реальное противоречие.
 """
 
 
-# ─────────────────────────── Агент-критик ────────────────────────────────────
-
 class CriticAgent:
-    """
-    Агент-Критик на базе GigaChat.
-
-    Верифицирует логическую согласованность сцен с онтологической памятью.
-    """
-
     def __init__(
         self,
         credentials: str,
         scope: str = "GIGACHAT_API_PERS",
         model: str = "GigaChat",
     ):
-        """
-        Args:
-            credentials : Base64-строка авторизации (GIGACHAT_CREDENTIALS из .env)
-            scope       : OAuth scope
-            model       : Имя модели GigaChat
-        """
         self.credentials = credentials
         self.scope = scope
         self.model = model
@@ -79,19 +72,12 @@ class CriticAgent:
         self._token: Optional[str] = None
         self._token_expires_at: float = 0.0
 
-        # Статистика
+        # ← Исправлено: единое написание без подчёркивания
         self.total_requests: int = 0
         self.total_approvals: int = 0
         self.total_rejections: int = 0
 
-    # ── Авторизация ────────────────────────────────────────────────────────────
-
     def _ensure_token(self) -> str:
-        """
-        Получить (или обновить) OAuth-токен GigaChat.
-
-        Токен кешируется и обновляется за 60 секунд до истечения.
-        """
         now = time.time()
         if self._token and now < self._token_expires_at - 60:
             return self._token
@@ -112,20 +98,10 @@ class CriticAgent:
         response.raise_for_status()
         data = response.json()
         self._token = data["access_token"]
-        # GigaChat токен живёт 30 минут (1800 сек)
         self._token_expires_at = now + 1800
-        logger.debug("🔑 Critic: Токен получен")
         return self._token
 
-    # ── API запрос ─────────────────────────────────────────────────────────────
-
     def _call_api(self, user_prompt: str) -> Tuple[str, int]:
-        """
-        Выполнить запрос к GigaChat API.
-
-        Returns:
-            Tuple[ответ модели, использовано токенов]
-        """
         token = self._ensure_token()
         start_time = time.time()
 
@@ -142,7 +118,7 @@ class CriticAgent:
                     {"role": "system", "content": _SYSTEM_CRITIC},
                     {"role": "user", "content": user_prompt},
                 ],
-                "temperature": 0.1,  # Низкая для детерминированной логической проверки
+                "temperature": 0.05,  # Почти детерминированный
                 "max_tokens": 1500,
                 "stream": False,
             },
@@ -157,14 +133,9 @@ class CriticAgent:
         elapsed = time.time() - start_time
 
         self.total_requests += 1
-
-        logger.debug(
-            "🔍 Critic API: %.1f сек, %d токенов", elapsed, tokens
-        )
+        logger.debug("🔍 Critic API: %.1f сек, %d токенов", elapsed, tokens)
 
         return content, tokens
-
-    # ── Публичный API ──────────────────────────────────────────────────────────
 
     def review_scene(
         self,
@@ -172,73 +143,156 @@ class CriticAgent:
         memory_context: Dict[str, Any],
         scene_plan: Dict[str, Any],
         approved_scenes: List[Dict[str, Any]],
+        story_bible: str = "",          # ← новый параметр
+        tracker_conflicts: Optional[List[Dict[str, Any]]] = None,  # ← из StateTracker
     ) -> Tuple[bool, str]:
-        """
-        Проверить сцену на логическую согласованность.
 
-        Args:
-            scene_text      : Текст черновика сцены от Писателя
-            memory_context  : Полный контекст памяти из MCP
-            scene_plan      : Ожидаемый план текущей сцены
-            approved_scenes : Уже одобренные сцены (для проверки связности)
+        word_count = len(scene_text.split())
 
-        Returns:
-            Tuple[approved (bool), feedback (str)]
-            - approved=True  → сцена логически корректна
-            - approved=False → feedback содержит список замечаний
-        """
-        logger.info(
-            "🔍 Critic: Проверяю сцену '%s'...",
-            scene_plan.get("title", "?"),
-        )
+        if word_count > 600:
+            self.total_rejections += 1
+            return False, f"Сцена слишком длинная: {word_count} слов. Сократи до 300–550."
 
-        import json
+        if word_count < 250:
+            self.total_rejections += 1
+            return False, f"Сцена слишком короткая: {word_count} слов. Минимум 300."
 
-        # Формируем промпт для Критика
-        # Берём только релевантные части памяти (не перегружаем контекст)
+        # Если StateTracker уже нашёл критические конфликты — сразу отклоняем
+        if tracker_conflicts:
+            critical = [c for c in tracker_conflicts if c.get("severity") == "critical"]
+            if critical:
+                feedback_lines = ["StateTracker обнаружил критические конфликты:"]
+                for c in critical:
+                    feedback_lines.append(
+                        f"{len(feedback_lines)}. {c.get('description', '')} "
+                        f"(канон: '{c.get('canonical_fact', '')}', "
+                        f"в тексте: '{c.get('scene_fact', '')}')"
+                    )
+                self.total_rejections += 1
+                return False, "\n".join(feedback_lines)
+
+        canonical = _build_canonical_facts(memory_context)
         memory_summary = _build_memory_summary(memory_context)
         previous_summary = _build_previous_scenes_summary(approved_scenes)
 
         user_prompt = (
-            f"ПЛАН СЦЕНЫ (что должно произойти):\n"
+            # Story Bible — первый блок
+            (f"STORY BIBLE (абсолютный канон):\n{story_bible}\n\n" if story_bible else "")
+            + f"КАНОНИЧЕСКИЕ ФАКТЫ ИЗ ПАМЯТИ:\n{canonical}\n\n"
+            f"ПЛАН СЦЕНЫ:\n"
             f"Цель: {scene_plan.get('goal', '')}\n"
-            f"Ключевое событие: {scene_plan.get('key_event', '')}\n"
-            f"Место: {scene_plan.get('location', '')}\n\n"
-            f"ОНТОЛОГИЧЕСКАЯ ПАМЯТЬ (факты о мире):\n"
-            f"{memory_summary}\n\n"
-            + (f"ПРЕДЫДУЩИЕ СЦЕНЫ (краткое содержание):\n{previous_summary}\n\n"
-               if previous_summary else "")
-            + f"ТЕКСТ СЦЕНЫ ДЛЯ ПРОВЕРКИ:\n{scene_text}\n\n"
-            f"Проверь сцену на логические несоответствия с памятью и предыдущими сценами."
+            f"Ключевое событие: {scene_plan.get('key_event', '')}\n\n"
+            f"ТЕКУЩЕЕ СОСТОЯНИЕ:\n{memory_summary}\n\n"
+            + (f"ПРЕДЫДУЩИЕ СЦЕНЫ:\n{previous_summary}\n\n" if previous_summary else "")
+            + f"ТЕКСТ СЦЕНЫ ({word_count} слов):\n{scene_text}\n\n"
+            f"Проверь на конфликты с Story Bible и каноническими фактами."
         )
 
         content, tokens = self._call_api(user_prompt)
-
-        # Определяем результат
         is_approved = content.strip().startswith(APPROVE_MARKER)
 
         if is_approved:
             self.total_approvals += 1
-            logger.info("✅ Critic: [APPROVE] — сцена одобрена (%d токенов)", tokens)
         else:
             self.total_rejections += 1
-            logger.info(
-                "❌ Critic: Замечания найдены (%d токенов):\n%s",
-                tokens, content[:300],
-            )
 
         return is_approved, content
 
     def get_stats(self) -> Dict[str, int]:
-        """Вернуть статистику проверок."""
         return {
             "total_requests": self.total_requests,
             "total_approvals": self.total_approvals,
             "total_rejections": self.total_rejections,
         }
 
-
 # ─────────────────────────── Вспомогательные функции ──────────────────────────
+def _build_canonical_facts(memory_context: Dict[str, Any]) -> str:
+    """
+    Извлечь канонические факты которые НЕЛЬЗЯ нарушать.
+
+    Это главный инструмент против путаницы в родстве и деталях.
+    Включает: персонажей с ролями/родством, погоду, число подозреваемых.
+    """
+    lines: List[str] = []
+
+    # ── Замороженные факты из памяти ──────────────────────────────────────────
+    frozen_facts = memory_context.get("frozen_facts", {})
+    frozen_present = frozen_facts.get("present", {})
+    if frozen_present:
+        lines.append("ЗАФИКСИРОВАННЫЕ ДЕТАЛИ МИРА:")
+        for fact_key, fact_data in frozen_present.items():
+            if isinstance(fact_data, dict):
+                lines.append(f"  • {fact_key} = {fact_data.get('value', '?')}")
+
+    # ── Персонажи из past (backstory — самый надёжный источник) ───────────────
+    past = memory_context.get("past", {})
+    past_chars = past.get("characters", {}) if isinstance(past, dict) else {}
+
+    present = memory_context.get("present", {})
+    present_chars = present.get("characters", {}) if isinstance(present, dict) else {}
+
+    # Объединяем: past — канон, present — текущие данные
+    all_chars: Dict[str, Any] = {}
+    if isinstance(past_chars, dict):
+        all_chars.update(past_chars)
+    if isinstance(present_chars, dict):
+        for name, info in present_chars.items():
+            if name not in all_chars:
+                all_chars[name] = info
+
+    if all_chars:
+        lines.append("\nПЕРСОНАЖИ (канонические роли и родство):")
+        suspects = []
+        investigator = None
+
+        for name, info in all_chars.items():
+            if not isinstance(info, dict):
+                continue
+
+            role = info.get("role", "")
+            traits = info.get("traits", [])
+            relationships = info.get("relationships", {})
+
+            # Строим строку персонажа
+            char_line = f"  • {name}"
+            if role:
+                char_line += f" — {role}"
+            if traits:
+                char_line += f" [{', '.join(traits[:3])}]"
+            if relationships:
+                rel_parts = [f"{k}: {v}" for k, v in relationships.items()]
+                char_line += f" (родство/отношения: {'; '.join(rel_parts)})"
+
+            lines.append(char_line)
+
+            # Определяем подозреваемых vs следователя
+            role_lower = role.lower()
+            if any(w in role_lower for w in ["следователь", "инспектор", "детектив", "сыщик"]):
+                investigator = name
+            elif info.get("status") != "dead":
+                suspects.append(name)
+
+        # ── Явно указываем число подозреваемых ────────────────────────────────
+        lines.append(f"\nЧИСЛО ПОДОЗРЕВАЕМЫХ: {len(suspects)}")
+        lines.append(f"Подозреваемые: {', '.join(suspects)}")
+        if investigator:
+            lines.append(f"Следователь (НЕ подозреваемый): {investigator}")
+
+    # ── Реестр улик ───────────────────────────────────────────────────────────
+    clue_registry = memory_context.get("clue_registry", {})
+    if isinstance(clue_registry, dict) and clue_registry:
+        lines.append("\nЗАРЕГИСТРИРОВАННЫЕ УЛИКИ:")
+        for clue_id, clue in clue_registry.items():
+            if not isinstance(clue, dict):
+                continue
+            lines.append(
+                f"  • [{clue_id}] {clue.get('description', '')} "
+                f"— место: {clue.get('location', '?')}, "
+                f"статус: {clue.get('status', 'hidden')}"
+            )
+
+    return "\n".join(lines) if lines else "Канонические факты не установлены"
+
 
 def _build_memory_summary(memory_context: Dict[str, Any]) -> str:
     """
