@@ -509,7 +509,7 @@ class StateTrackerAgent:
                 if not isinstance(info, dict):
                     continue
                 if name in self._bible["characters"]:
-                    continue  # уже добавлен из предыдущего слоя
+                    continue
 
                 role = info.get("role", "")
                 role_lower = role.lower()
@@ -680,8 +680,6 @@ class StateTrackerAgent:
         is_consistent = len(critical) == 0
         self.total_conflicts_found += len(conflicts)
         return conflicts, is_consistent
-    
-    # agents/state_tracker.py
 
     def get_scene_transition(self, prev_scene_index: int) -> str:
         """
@@ -897,7 +895,7 @@ class StateTrackerAgent:
 
             door_key = door_name.lower().replace(" ", "_")[:30]
             if door_key not in self._bible["doors"]:
-                continue  # новая дверь — конфликтов нет
+                continue
 
             bible_door = self._bible["doors"][door_key]
             scene_status = door_data.get("locked_status", "")
@@ -971,8 +969,6 @@ class StateTrackerAgent:
             if not canonical_text or not scene_text_fragment:
                 continue
 
-            # ── ИСПРАВЛЕНИЕ: убираем многоточия и пробелы перед сравнением ────
-            # Writer иногда начинает цитату с «…» что ломало fingerprint
             def _normalize_quote(text: str) -> str:
                 """Убрать ведущие многоточия, кавычки, пробелы."""
                 return (
@@ -1224,7 +1220,7 @@ class StateTrackerAgent:
                     doc["current_location"] = doc_data["location"]
                     doc["location"] = doc_data["location"]
         
-        # ── НОВОЕ: Сенсорные детали ────────────────────────────────────────────
+        # ── Сенсорные детали ────────────────────────────────────────────
         sensory = extracted.get("sensory_details", {})
         if isinstance(sensory, dict) and sensory:
             if "sensory_canon" not in self._bible:
@@ -1352,7 +1348,7 @@ class StateTrackerAgent:
                 if person_b not in char.get("relationships", {}):
                     char.setdefault("relationships", {})[person_b] = relation
 
-        # ── НОВОЕ: Сохраняем окончание сцены для плавного перехода ────────────
+        # ── Сохраняем окончание сцены для плавного перехода ────────────
         if scene_text:
             ending = _extract_scene_ending(scene_text, sentences=3)
             self._bible["scene_endings"][str(scene_index)] = ending
@@ -1521,7 +1517,7 @@ class StateTrackerAgent:
                 lines.append(line)
             lines.append("")
 
-        # ── НОВОЕ: Документы с точным текстом ─────────────────────────────────
+        # ── Документы с точным текстом ─────────────────────────────────
         docs = self._bible.get("document_texts", {})
         if docs:
             lines.append(
@@ -1547,7 +1543,7 @@ class StateTrackerAgent:
                     )
             lines.append("")
 
-        # ── НОВОЕ: Сенсорный канон ─────────────────────────────────────────────
+        # ── Сенсорный канон ─────────────────────────────────────────────
         sensory = self._bible.get("sensory_canon", {})
         if sensory:
             lines.append(
@@ -1565,7 +1561,7 @@ class StateTrackerAgent:
             lines.append("")
 
 
-        # ── НОВОЕ: Состояние дверей ────────────────────────────────────────────
+        # ── Состояние дверей ────────────────────────────────────────────
         doors = self._bible.get("doors", {})
         if doors:
             lines.append(
@@ -1589,7 +1585,7 @@ class StateTrackerAgent:
                     lines.append(f"    История: {changes}")
             lines.append("")
 
-        # ── НОВОЕ: NO SPAWNING rule ────────────────────────────────────────────
+        # ── NO SPAWNING rule ────────────────────────────────────────────
         scene_inv = self._bible.get("scene_inventory", {})
         all_known_items: List[str] = []
         for loc_data in scene_inv.values():

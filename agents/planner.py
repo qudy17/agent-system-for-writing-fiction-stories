@@ -175,7 +175,7 @@ class ScenePlannerAgent:
         location_state: str,
         scene_transition: str,
         approved_scenes: List[Dict[str, Any]],
-        all_characters: Optional[List[str]] = None,  # ← НОВЫЙ параметр
+        all_characters: Optional[List[str]] = None,
     ) -> Tuple[str, bool]:
         """
         Создать и валидировать короткий логический план сцены.
@@ -210,7 +210,7 @@ class ScenePlannerAgent:
                 f"{last_text[:150]}{'...' if len(last_text) > 150 else ''}"
             )
 
-        # ── НОВОЕ: Персонажи которых ещё не допросили ─────────────────────────
+        # ── Персонажи которых ещё не допросили ─────────────────────────
         coverage_hint = ""
         if all_characters and approved_scenes:
             # Собираем имена из текстов уже написанных сцен

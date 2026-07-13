@@ -165,7 +165,7 @@ def _retry(
                 logger.info("   ⏳ Жду %.0f сек...", delay)
                 time.sleep(delay)
 
-    raise last_exc  # type: ignore[misc]
+    raise last_exc
 
 
 # ─────────────────────────── Сохранение рассказа ──────────────────────────────
@@ -407,7 +407,6 @@ def _run_story_loop(
             scene.get("goal", ""),
         )
 
-    # Сохраняем план и лор в MCP
     memory.initialize(
         title=title,
         initial_lore=initial_lore,

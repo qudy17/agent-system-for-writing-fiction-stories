@@ -392,7 +392,7 @@ class WriterAgent:
                 f"=== {last_scene['title']} ===\n{last_scene['text']}"
             )
 
-        # ── НОВОЕ: Строим список уже использованных деталей ───────────────────
+        # ── Строим список уже использованных деталей ───────────────────
         used_details = _build_used_details_warning(approved_scenes)
 
         memory_summary = _compact_memory(memory_context)
@@ -405,7 +405,7 @@ class WriterAgent:
                 f"{approved_plan}\n\n"
                 if approved_plan else ""
             )
-            # ── НОВОЕ: предупреждение о повторениях ───────────────────────────
+            # ── предупреждение о повторениях ───────────────────────────
             + (f"{used_details}\n\n" if used_details else "")
             + f"СЦЕНА ДЛЯ НАПИСАНИЯ:\n"
             f"Номер: {scene_plan.get('index', 0) + 1} из 5\n"
@@ -449,8 +449,8 @@ class WriterAgent:
         scene_plan: Dict[str, Any],
         memory_context: Dict[str, Any],
         iteration: int,
-        story_bible: str = "",                          # ← Story Bible
-        conflicts: Optional[List[Dict[str, Any]]] = None,  # ← конфликты из StateTracker
+        story_bible: str = "",
+        conflicts: Optional[List[Dict[str, Any]]] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """
         Переписать сцену по замечаниям Критика.
@@ -563,7 +563,6 @@ def _validate_and_fix_length(
             "⚠️  Сцена %d слишком короткая: %d слов (минимум: %d)",
             scene_index + 1, word_count, SCENE_MIN_WORDS,
         )
-        # Короткие сцены не обрезаем — критик попросит дополнить
 
     elif word_count > SCENE_HARD_LIMIT:
         logger.warning(

@@ -50,29 +50,23 @@ class OntologyMemoryMCP:
     def start(self) -> None:
         """Запустить MCP-сервер как дочерний процесс."""
         if self._process is not None:
-            return  # Уже запущен
+            return
 
         env = os.environ.copy()
         env["STORY_DIR"] = str(self.story_dir)
-        # Форсируем UTF-8 для всех потоков дочернего процесса
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONLEGACYWINDOWSSTDIO"] = "0"
 
-        # Запускаем в бинарном режиме (text=False) —
-        # это единственный надёжный способ контролировать кодировку на Windows.
-        # text=True использует системную кодировку (cp1251) игнорируя encoding=
-        # в некоторых версиях Python на Windows.
         self._process = subprocess.Popen(
             [sys.executable, "-X", "utf8", str(self.server_path)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=False,         # ← бинарный режим
+            text=False,
             env=env,
             cwd=str(self.server_path.parent.parent),
         )
 
-        # Оборачиваем бинарные потоки в текстовые с явным UTF-8
         assert self._process.stdin is not None
         assert self._process.stdout is not None
 
@@ -108,7 +102,6 @@ class OntologyMemoryMCP:
         if self._stdin is None:
             raise RuntimeError("MCP процесс не запущен")
 
-        # Кодируем явно в UTF-8 — независимо от системной кодировки
         raw = (data + "\n").encode("utf-8")
         self._stdin.write(raw)
         self._stdin.flush()
@@ -129,7 +122,6 @@ class OntologyMemoryMCP:
         raw = self._stdout.readline()
 
         if not raw:
-            # Процесс завершился — читаем stderr для диагностики
             stderr_text = ""
             if self._process and self._process.stderr:
                 try:
@@ -142,7 +134,6 @@ class OntologyMemoryMCP:
                 f"stderr: {stderr_text[:500]}"
             )
 
-        # Декодируем явно из UTF-8
         return raw.decode("utf-8", errors="replace").strip()
 
     def _call(
@@ -176,8 +167,6 @@ class OntologyMemoryMCP:
             },
         }
         self._next_id += 1
-
-        # Сериализуем с ensure_ascii=False — UTF-8 поток сам справится
         request_json = json.dumps(request, ensure_ascii=False)
 
         # Отправляем через бинарный поток

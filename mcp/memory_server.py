@@ -53,10 +53,10 @@ def _empty_time_layer() -> Dict[str, Any]:
             "atmosphere": None,     # "мрачная" | "напряжённая"
             "temperature": None,    # "холодно" | "промозгло"
         },
-        "frozen_facts": {},         # ← НОВОЕ: факты которые нельзя менять
+        "frozen_facts": {},
         "characters": {},
         "clues": [],
-        "clue_index": {},           # ← НОВОЕ: id → индекс в clues для быстрого доступа
+        "clue_index": {},
         "events": [],
         "relationships": {},
         "secrets": [],
@@ -78,10 +78,8 @@ def _empty_memory() -> Dict[str, Any]:
         "past": _empty_time_layer(),
         "present": _empty_time_layer(),
         "future": _empty_time_layer(),
-        # Глобальный реестр улик — единый источник правды
-        "clue_registry": {},        # ← НОВОЕ: {clue_id: {description, location, status, introduced_in_scene}}
-        # Лог изменений для отладки
-        "change_log": [],           # ← НОВОЕ: [{scene, field, old_value, new_value}]
+        "clue_registry": {},
+        "change_log": [],
         "scene_plan": [],
         "approved_scenes": [],
     }
@@ -142,7 +140,6 @@ def memory_initialize(arguments: Dict[str, Any]) -> Dict[str, Any]:
 
             value = layer_data[key]
 
-            # world_state ОБЯЗАН быть dict — если пришла строка, конвертируем
             if key == "world_state":
                 if isinstance(value, str):
                     print(
@@ -158,13 +155,12 @@ def memory_initialize(arguments: Dict[str, Any]) -> Dict[str, Any]:
                         file=sys.stderr,
                     )
                     continue
-                # Мёржим в существующий world_state, не заменяем целиком
+
                 mem[layer]["world_state"].update(
                     {k: v for k, v in value.items() if v is not None}
                 )
                 continue
 
-            # characters ОБЯЗАН быть dict
             if key == "characters":
                 if not isinstance(value, dict):
                     print(
@@ -176,12 +172,10 @@ def memory_initialize(arguments: Dict[str, Any]) -> Dict[str, Any]:
                 mem[layer]["characters"] = value
                 continue
 
-            # clues/events/secrets ОБЯЗАНЫ быть list
             if key in ("clues", "events", "secrets", "relationships"):
                 if isinstance(value, list):
                     mem[layer][key] = value
                 elif isinstance(value, dict):
-                    # Иногда модель возвращает dict вместо list
                     mem[layer][key] = list(value.values())
                 else:
                     print(
@@ -297,9 +291,7 @@ def memory_get_context(arguments: Dict[str, Any]) -> Dict[str, Any]:
         "meta": mem["meta"],
         "scene_plan": mem["scene_plan"],
         "current_scene": _get_current_scene_plan(mem),
-        # ← Всегда передаём реестр — агенты знают все улики
         "clue_registry": clue_registry_summary,
-        # ← Замороженные факты — агенты не могут их менять
         "frozen_facts": {
             layer: mem[layer].get("frozen_facts", {})
             for layer in TIME_LAYERS
@@ -326,7 +318,7 @@ def memory_update(arguments: Dict[str, Any]) -> Dict[str, Any]:
             conflicts = _deep_merge(
                 mem[layer],
                 diff[layer],
-                mem=mem,      # передаём полную память для заморозки и реестра
+                mem=mem,
                 layer=layer,
                 path="",
             )
@@ -347,12 +339,11 @@ def memory_update(arguments: Dict[str, Any]) -> Dict[str, Any]:
         "current_scene_index": mem["meta"]["current_scene_index"],
         "story_finished": mem["meta"]["story_finished"],
         "meta": mem["meta"],
-        # ← Конфликты возвращаем в оркестратор для логирования
         "conflicts": all_conflicts,
         "clue_registry_size": len(mem.get("clue_registry", {})),
     }
 
-def memory_get_full(arguments: Dict[str, Any]) -> Dict[str, Any]:  # noqa: ARG001
+def memory_get_full(arguments: Dict[str, Any]) -> Dict[str, Any]:
     """
     Получить полный снимок памяти.
 
@@ -398,7 +389,7 @@ def memory_add_scene(arguments: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def memory_get_scenes(arguments: Dict[str, Any]) -> Dict[str, Any]:  # noqa: ARG001
+def memory_get_scenes(arguments: Dict[str, Any]) -> Dict[str, Any]:
     """
     Получить все одобренные сцены.
 
@@ -413,7 +404,7 @@ def memory_get_scenes(arguments: Dict[str, Any]) -> Dict[str, Any]:  # noqa: ARG
     }
 
 
-def memory_reset(arguments: Dict[str, Any]) -> Dict[str, Any]:  # noqa: ARG001
+def memory_reset(arguments: Dict[str, Any]) -> Dict[str, Any]:
     """
     Полностью сбросить память (начать новую историю).
 
@@ -426,8 +417,6 @@ def memory_reset(arguments: Dict[str, Any]) -> Dict[str, Any]:  # noqa: ARG001
 
 
 # ─────────────────────────── Вспомогательные функции ──────────────────────────
-# memory_server.py
-
 # Поля world_state, которые замораживаются после первой установки
 
 _FREEZE_ON_SET = {"weather", "time_of_day", "location", "temperature"}
@@ -656,7 +645,6 @@ def _deep_merge(
                     _log_change(mem, f"{layer}.world_state.{key}", old_value, value)
 
         # ── Защита атрибутов персонажей ────────────────────────────────────────
-        # path выглядит как "characters.ИМЯ" при мерже конкретного персонажа
         if mem and layer and path.startswith("characters."):
             char_name = path.split(".")[1] if len(path.split(".")) > 1 else ""
             if char_name and key in ("role", "traits", "relationships"):
@@ -680,7 +668,7 @@ def _deep_merge(
                         )
                         conflicts.append(conflict_msg)
                         print(f"[MEMORY] {conflict_msg}", file=sys.stderr)
-                        continue  # Не применяем изменение
+                        continue
 
         # ── Рекурсия для вложенных dict ────────────────────────────────────────
         if key in base and isinstance(base[key], dict) and isinstance(value, dict):
@@ -778,9 +766,6 @@ def _handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
 
 def main() -> None:
     """Запустить MCP память-сервер в режиме stdio."""
-    # Перезапускаем stdin/stdout в бинарном режиме с явным UTF-8.
-    # Это необходимо на Windows где sys.stdin/stdout по умолчанию cp1251.
-    # Используем errors="replace" чтобы не падать на неожиданных символах.
     stdin  = io.TextIOWrapper(
         sys.stdin.buffer,
         encoding="utf-8",
@@ -792,7 +777,7 @@ def main() -> None:
         encoding="utf-8",
         errors="replace",
         newline="\n",
-        write_through=True,     # сбрасываем буфер после каждой записи
+        write_through=True,
     )
 
     STORY_DIR.mkdir(parents=True, exist_ok=True)

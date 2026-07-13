@@ -89,7 +89,6 @@ class CriticAgent:
         self._token: Optional[str] = None
         self._token_expires_at: float = 0.0
 
-        # ← Исправлено: единое написание без подчёркивания
         self.total_requests: int = 0
         self.total_approvals: int = 0
         self.total_rejections: int = 0
@@ -160,8 +159,8 @@ class CriticAgent:
         memory_context: Dict[str, Any],
         scene_plan: Dict[str, Any],
         approved_scenes: List[Dict[str, Any]],
-        story_bible: str = "",          # ← новый параметр
-        tracker_conflicts: Optional[List[Dict[str, Any]]] = None,  # ← из StateTracker
+        story_bible: str = "",
+        tracker_conflicts: Optional[List[Dict[str, Any]]] = None,
     ) -> Tuple[bool, str]:
 
         word_count = len(scene_text.split())
